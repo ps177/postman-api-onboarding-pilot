@@ -27,6 +27,10 @@ on:
         description: Environments as JSON array
         required: true
         default: '["prod","uat","qa","dev"]'
+      env_urls:
+        description: Base URL per environment as JSON object
+        required: true
+        default: '{"prod":"https://api.payments.example.com/v2","uat":"https://api-uat.payments.example.com/v2","qa":"https://api-qa.payments.example.com/v2","dev":"https://api-dev.payments.example.com/v2"}'
 
 jobs:
   onboard:
@@ -48,6 +52,10 @@ jobs:
           spec-url: ${{ inputs.spec_url }}
           spec-path: ${{ inputs.spec_path }}
           environments-json: ${{ inputs.environments }}
+          # NEW: populate baseUrl per environment (spec servers were not auto-applied)
+          env-runtime-urls-json: ${{ inputs.env_urls }}
+          # NEW: keep our manual fix in ci.yml from being overwritten on rerun
+          generate-ci-workflow: 'false'
           postman-api-key: ${{ secrets.POSTMAN_API_KEY }}
           postman-access-token: ${{ secrets.POSTMAN_ACCESS_TOKEN }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
