@@ -1,4 +1,4 @@
-name: Onboard Service
+name: Onboard Service to Postman
 
 on:
   workflow_dispatch:
@@ -6,18 +6,27 @@ on:
       project_name:
         description: Service project name
         required: true
+        default: payment-refund-api
       spec_url:
-        description: Raw HTTPS URL for the OpenAPI document
+        description: Raw HTTPS URL of the OpenAPI spec
         required: true
+        default: https://raw.githubusercontent.com/ps177/postman-api-onboarding-pilot/main/specs/payment-refund-api-openapi.yaml
       spec_path:
-        description: Repo-relative path to the local spec file
+        description: Repo-relative path to the spec
         required: true
+        default: specs/payment-refund-api-openapi.yaml
       domain:
-        description: Optional business domain label
-        required: false
-      requester_email:
-        description: Optional requester email for audit context
-        required: false
+        description: Business domain
+        required: true
+        default: payments
+      domain_code:
+        description: Short domain code
+        required: true
+        default: PAY
+      environments:
+        description: Environments as JSON array
+        required: true
+        default: '["prod","uat","qa","dev"]'
 
 jobs:
   onboard:
@@ -29,14 +38,17 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Run starter onboarding flow
-        uses: ./starter-assets/actions/onboard-service
+      - name: Onboard service into Postman
+        uses: postman-cs/postman-api-onboarding-action@v0
         with:
           project-name: ${{ inputs.project_name }}
+          domain: ${{ inputs.domain }}
+          domain-code: ${{ inputs.domain_code }}
+          requester-email: yugen1793@gmail.com
           spec-url: ${{ inputs.spec_url }}
           spec-path: ${{ inputs.spec_path }}
-          domain: ${{ inputs.domain }}
-          requester-email: ${{ inputs.requester_email }}
+          environments-json: ${{ inputs.environments }}
           postman-api-key: ${{ secrets.POSTMAN_API_KEY }}
           postman-access-token: ${{ secrets.POSTMAN_ACCESS_TOKEN }}
-          github-token: ${{ github.token }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          gh-fallback-token: ${{ secrets.GH_FALLBACK_TOKEN }}
