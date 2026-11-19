@@ -9,6 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # FIX: secrets can't be used in step-level if:, so expose at job level via env
     env:
       POSTMAN_SSL_CLIENT_CERT_B64: ${{ secrets.POSTMAN_SSL_CLIENT_CERT_B64 }}
     steps:
@@ -42,6 +43,7 @@ jobs:
           end
           RUBY
       - name: Decode SSL certificates
+        # FIX: was `secrets.POSTMAN_SSL_CLIENT_CERT_B64`, which GitHub rejects in if:
         if: ${{ env.POSTMAN_SSL_CLIENT_CERT_B64 != '' }}
         env:
           POSTMAN_SSL_CLIENT_CERT_B64: ${{ secrets.POSTMAN_SSL_CLIENT_CERT_B64 }}
