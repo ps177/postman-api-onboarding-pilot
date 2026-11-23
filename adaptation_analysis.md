@@ -1,68 +1,83 @@
 # Adaptation Analysis: Claims Processing API
 
-How the onboarding pattern proven on the Payment Refund API would be applied to the Claims Processing API (`specs/claims-processing-api-openapi.yaml`).
+This document explains what I would change to onboard a second service, the Claims Processing API, using the same setup I built for the Payment Refund API.
 
-**Status:** analysis only. Nothing in this document has been run. Snippets are design sketches, not a tested implementation.
+**Note:** I have not run this. It is a plan based on reading the claims spec and on what I learned while building the payments setup. The GitLab example below is a sketch, not tested code.
 
-## Why Claims
+## Why I picked Claims
 
-Of the two remaining specs, Claims is the most different from Payments: different infrastructure (mixed Lambda/ECS), a different CI system (GitLab CI), a different auth model and a different environment set. If the pattern holds here, it holds for the easier cases too. Loan Origination (ECS/ALB, GitHub Actions) would change only inputs and network details.
+Claims is the most different from Payments:
+
+- It runs on a mix of Lambda and ECS (Payments runs only on Lambda).
+- Its team uses GitLab, not GitHub, for CI.
+- It uses a different login method and has a different set of environments.
+
+If the setup works for Claims, it will work for the easier services too.
 
 ---
 
-## 1. The two services side by side
+## 1. Payments vs Claims at a glance
 
-| | Payment Refund (built) | Claims Processing (analysed) |
+| | Payments (built) | Claims (planned) |
 |---|---|---|
-| Infrastructure | Lambda + API Gateway | Mixed Lambda/ECS |
-| CI system | GitHub Actions | **GitLab CI** (stated in the spec description) |
-| Endpoints | 6 | 6 + health: file claim, list, get, adjudicate, create settlement, get settlement |
-| Servers | 4: prod, uat, qa, dev (`/v2`) | **3: prod, staging, dev** (`/v3`) |
-| Auth | OAuth2 `authorizationCode` + JWT bearer | **API key (`X-API-Key` header)** + OAuth2 **`clientCredentials`** |
-| Auth usable by automation? | No for OAuth (needs a browser); JWT needs an internal issuer | **Yes**: both API key and client credentials are machine-friendly |
-| `/health` auth | Inherits global auth (likely wrong) | `security: []` (correct) |
-| Response examples | Rich | **None** (one request example only) |
-| Error responses | Detailed, with schemas | Sparse: no 401/403 anywhere; 404/409 have no schema |
-| Request `required` fields | Present | Present (`FileClaimRequest`, `AdjudicationRequest`, `SettlementRequest`) |
-| Success response `required` fields | None | None |
+| Where it runs | Lambda | Mix of Lambda and ECS |
+| CI tool | GitHub Actions | **GitLab** |
+| Endpoints | 6 | 6, plus a health check |
+| Environments | 4: prod, uat, qa, dev | **3: prod, staging, dev** |
+| URL version | `/v2` | `/v3` |
+| Login method | OAuth (needs a person to log in through a browser) or JWT | **API key** or OAuth "client credentials" (no person needed) |
+| Can a robot (CI, monitor) log in? | Hard | **Easy** |
+| Health check needs login? | Yes (probably a mistake) | No (correct) |
+| Example responses in the spec | Many | **None** |
+| Error responses described | Most of them | Few. No 401 or 403 at all |
 
 ---
 
-## 2. What stays the same
+## 2. What stays exactly the same
 
-- The onboarding workflow file and `postman-api-onboarding-action@v0`.
-- The bootstrap → repo-sync chain: workspace, Spec Hub upload, three collections, environments, mock, monitor.
-- Collection types and naming (`[CODE] service-name`, Baseline / Smoke / Contract).
-- `generate-ci-workflow` handling and passing base URLs explicitly with `env-runtime-urls-json`.
-- The validation checklist (§5 of the README) and rerun/idempotency behaviour.
-- The split between what the spec can test and what needs service knowledge.
+- The same workflow file and the same Postman action (`postman-api-onboarding-action@v0`).
+- The same steps: create workspace, upload spec, create 3 collections (Baseline, Smoke, Contract), create environments, create mock and monitor, save everything to the repo.
+- The same naming style, for example `[CLM] claims-processing-api`.
+- The same two settings I added for Payments:
+  - passing the base URL for each environment myself, and
+  - turning off the automatic CI file (`generate-ci-workflow: 'false'`).
+- The same checks after the run, and the same rerun behaviour (a second run updates the same workspace, it does not create a new one).
+
+---
 
 ## 3. What changes
 
-### 3a. Inputs only (no workflow change)
+### 3a. Only the inputs
+
+When you run the workflow, you fill in a form. For Claims, only these values change:
 
 | Input | Payments | Claims |
 |---|---|---|
-| `project_name` | `payment-refund-api` | `claims-processing-api` |
-| `domain` / `domain_code` | `payments` / `PAY` | `insurance` / `CLM` (to agree with the customer) |
-| `spec_url` / `spec_path` | payment spec | claims spec URL and path |
-| `environments` | `["prod","uat","qa","dev"]` | `["prod","staging","dev"]` |
-| `env_urls` | `api*.payments.example.com/v2` | `claims-api*.example.com/v3`, from the spec servers, to be replaced with real URLs |
+| Service name | `payment-refund-api` | `claims-processing-api` |
+| Domain | `payments` | `insurance` |
+| Short code | `PAY` | `CLM` (to confirm with the customer) |
+| Spec link | payments spec | claims spec |
+| Environments | `["prod","uat","qa","dev"]` | `["prod","staging","dev"]` |
+| Base URLs | payments URLs | claims URLs (real ones from the customer) |
 
-That is the whole difference for onboarding itself. The changes that matter are around it.
+**The workflow file itself does not change.** Everything else that is different is about working with the customer's teams, explained below.
 
-### 3b. CI system: GitLab instead of GitHub Actions
+### 3b. GitLab instead of GitHub
 
-The Postman actions are GitHub Actions and will not run in GitLab. Split the problem in two:
+The Postman actions only run on GitHub. The claims team uses GitLab. So I split the work into two parts.
 
-**Onboarding (create the workspace, collections, environments, mock, monitor).** This only needs the spec at a fetchable URL and the Postman API. Two options:
+**Part 1: Creating everything in Postman (one time per service)**
 
-| Option | How | Trade-off |
-|---|---|---|
-| **A. Central onboarding repo on GitHub (recommended for the pilot)** | The platform team's GitHub repo runs the same workflow, with `spec_url` pointing at the claims spec in GitLab | Zero change for the insurance team. Needs a GitLab read token (or a mirrored spec) so the runner can fetch a private raw file. Repo-sync would commit exported collections to the central GitHub repo, not to the claims GitLab repo |
-| **B. Native GitLab job** | A `.gitlab-ci.yml` job calls the Postman API / CLI directly | Keeps everything in GitLab, but re-implements what bootstrap and repo-sync do. More to build and maintain |
+This step only needs two things: a link to the spec, and the Postman API key. It does not have to run inside the claims team's GitLab.
 
-**Ongoing tests in the claims team's own pipeline.** This is simple, because the generated collections can be run by the Postman CLI from any CI system. Design sketch (not run):
+| Option | How it works | Good | Not so good |
+|---|---|---|---|
+| **A. Run it from a central GitHub repo (my recommendation for now)** | The platform team keeps one GitHub repo. They run the same workflow there, with the spec link pointing to the claims spec in GitLab. | The claims team does nothing. Same workflow as Payments. | GitHub needs permission to read the spec from GitLab (a GitLab token). The exported collections get saved in the GitHub repo, not in the claims team's GitLab repo. |
+| **B. Build it in GitLab** | Write a GitLab job that does the same steps using Postman's API. | Everything stays in GitLab. | We would have to rebuild what Postman's actions already do. More work to build and to look after. |
+
+**Part 2: Running the tests regularly (every code change)**
+
+This part is easy in GitLab. The Postman CLI (a command-line tool) can run any Postman collection from any CI tool. A GitLab job would look roughly like this (sketch, not tested):
 
 ```yaml
 # .gitlab-ci.yml (sketch)
@@ -73,69 +88,87 @@ postman_contract_tests:
     - apt-get update && apt-get install -y curl
     - curl -fsSL https://dl-cli.pstmn.io/install/unix.sh | sh
     - postman login --with-api-key "$POSTMAN_API_KEY"
-    - postman collection run "$CLAIMS_CONTRACT_COLLECTION_UID" -e "$CLAIMS_DEV_ENV_UID"
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - postman collection run "$CLAIMS_CONTRACT_COLLECTION_ID" -e "$CLAIMS_DEV_ENV_ID"
 ```
 
-The pattern is the same; only the execution layer changes. The collection and environment UIDs come from the `.postman/resources.yaml` written during onboarding.
+The collection and environment IDs come from the `.postman/resources.yaml` file that onboarding creates.
 
-### 3c. Repo topology
+**In short:** same pattern, only the place where it runs is different.
 
-One `.postman/resources.yaml` holds one workspace ID. Onboarding Claims into the payments pilot repo would collide with the Payments workspace. Claims gets its own state: either its own repo, or (with option A) its own folder/state file in the central repo. This needs to be decided before the second service, not after.
+### 3c. Where the Claims setup lives
 
-### 3d. Auth and secrets
+The action saves its memory in one file: `.postman/resources.yaml`. This file holds only **one** workspace ID. If I onboard Claims into the same repo as Payments, the two would clash.
 
-- Payments needed a JWT or OAuth with a browser step. Claims can use an **API key** or **OAuth client credentials**, both suitable for CI and monitors. This is an improvement.
-- The generated "00 - Resolve Secrets" request pulls credentials from AWS Secrets Manager (`api-credentials-<env>`). The shape of the stored secret differs (an API key or client ID/secret instead of a JWT), so the insurance team must confirm what is stored and where. To be validated on the first run.
-- The "Resolve Secrets" ordering bug found on Payments (it runs last) would apply here too.
+So Claims needs its own place: either its own repo, or its own folder in the central repo. This must be decided before onboarding the second service.
 
-### 3e. Infrastructure: mixed Lambda/ECS
+### 3d. Login and secrets
 
-- The spec has one server per environment. If some endpoints are served by Lambda (behind API Gateway) and others by ECS (behind an ALB), the team must confirm whether a single gateway fronts both. If not, one `baseUrl` per environment is not enough.
-- Network reachability must be checked for **both** paths: a private API Gateway and an internal ALB are reached differently. The Postman cloud monitor (US East) will reach neither if they are private.
+- **Good news:** Claims supports an API key and OAuth client credentials. Both work for robots (CI and monitors) without a person logging in. Payments did not have this.
+- The collections include a request called "00 - Resolve Secrets". It fetches login details from AWS Secrets Manager (a secure store in AWS), using a secret named `api-credentials-<env>`. For Claims, the stored secret will be an API key or client ID/secret instead of a JWT. The claims team must confirm what is stored and where. This needs testing on the first run.
+- In Payments, I found that "00 - Resolve Secrets" runs **last** instead of first, so no request gets logged in. The same problem would happen for Claims.
 
-### 3f. What the generated assets will and won't give us
+### 3e. Lambda and ECS mix
 
-- **Mock server will be weak.** The spec has no response examples, so the mock has no realistic responses to return. Ask the insurance team to add examples before consumers rely on the mock.
-- **Contract coverage is thinner than Payments.** No 401/403 responses are defined, so any auth failure fails "status code is defined by OpenAPI". 404/409 and the settlement 400 have no schema, so their bodies cannot be checked. Success schemas have no `required` fields.
-- **Health is unauthenticated (good) but only `200` is defined.** If the service reports `unhealthy` with a 503, the contract test fails on "status code not defined", even though 503 is the correct behaviour.
+- The spec gives one URL per environment. But some claims endpoints may run on Lambda and others on ECS. I need to ask the team: is there one front door (one URL) for both, or two different URLs? If two, one base URL per environment is not enough.
+- If the APIs are private (inside the bank's network), the Postman cloud monitor cannot reach them. This has to be checked for both the Lambda side and the ECS side.
 
----
+### 3f. What the generated tests and mock will be like
 
-## 4. Claims spec issues to raise with the insurance team
-
-1. No response examples, so the mock is of little use.
-2. No `401` or `403` responses, despite two auth schemes and OAuth scopes.
-3. `404`, `409` and the settlement `400` have no response schema.
-4. `Claim.lineOfBusiness` has no enum, although the request and list filter define one.
-5. `AdjudicationResult.decision` has no enum, although the request defines `approved / denied / partial_approval`.
-6. `approvedAmount` is required in `AdjudicationRequest` even when the decision is `denied`.
-7. Nothing links the settlement `amount` to the adjudicated `approvedAmount`; that rule lives only in people's heads.
-8. A file-upload rate limit is described, but there is no upload endpoint.
-9. `/health` defines only `200`; there is no `503` for degraded/unhealthy.
-10. Business rules (active policy, filed within 90 days, one claim per incident) exist only in description text.
-
-None of these block onboarding. Like Payments, the spec would be onboarded as-is and the issues returned to the owning team.
+- **The mock will not be very useful.** A mock replies using the examples in the spec. The claims spec has no response examples, so the mock has nothing realistic to send back. The claims team should add examples.
+- **The contract tests will be weaker than for Payments:**
+  - There is no 401 or 403 in the spec. So if a login fails, the test fails with "status code not defined", instead of a clear message.
+  - Some error responses (404, 409, settlement 400) have no body format, so their body cannot be checked.
+  - Success responses do not mark any field as required, so a missing field would not be caught.
+- **Health check:** only `200` is described. If the service is unhealthy and correctly returns `503`, the test fails, because `503` is not in the spec.
 
 ---
 
-## 5. What we need from the platform and insurance teams
+## 4. Problems I found in the Claims spec
 
-| Need | Why |
+These do not stop onboarding. Like with Payments, I would onboard the spec as it is and send this list to the claims team.
+
+1. No example responses, so the mock is weak.
+2. No 401 or 403 responses, even though the spec has two login methods.
+3. 404, 409 and the settlement 400 have no response body format.
+4. `lineOfBusiness` has a fixed list of values in the request, but not in the response.
+5. `decision` has a fixed list (`approved`, `denied`, `partial_approval`) in the request, but not in the response.
+6. `approvedAmount` is required even when the claim is denied.
+7. Nothing says the settlement amount must match the approved amount. That rule is not written anywhere in the spec.
+8. The description mentions a rate limit for file uploads, but there is no upload endpoint.
+9. The health check has no `503` response for "unhealthy".
+10. Business rules (policy must be active, claim within 90 days, one claim per incident) are only written as text, so no test can be generated for them.
+
+---
+
+## 5. What I need from the customer's teams
+
+| What I need | Why |
 |---|---|
-| Real base URLs for prod, staging, dev, and confirmation of whether Lambda and ECS share one host | Environments and `env_urls` input |
-| An API key or OAuth client credentials for automation, and where they are stored | Smoke/contract runs and monitors |
-| Decision: central GitHub onboarding repo (A) or native GitLab job (B) | Onboarding path |
-| A GitLab read token or mirrored spec, if option A | The GitHub runner must fetch the spec |
-| A GitLab runner and CI variables (`POSTMAN_API_KEY`, collection and environment UIDs) | Ongoing contract tests in their pipeline |
-| Network path to private API Gateway and internal ALB, or a private runner | Monitors and CI reaching the API |
-| Test data: an active policy ID and an incident date within 90 days | Business-rule tests |
-| Response examples and 401/403 responses added to the spec | Useful mock and stronger contract tests |
-| Which environment CI may target (`settlement` creates payments) | Avoid side effects in prod |
+| Real URLs for prod, staging and dev, and whether Lambda and ECS share one URL | To set up the environments |
+| An API key or client credentials for automated runs, and where they are stored | So tests and monitors can log in |
+| A decision: run onboarding from a central GitHub repo (Option A) or build it in GitLab (Option B) | To know where onboarding runs |
+| A GitLab token, if Option A | So GitHub can read the spec from GitLab |
+| A GitLab runner and CI variables (Postman key, collection and environment IDs) | To run tests in their own pipeline |
+| Network access to the private APIs, or a private runner | So monitors and CI can actually reach the API |
+| Test data, like an active policy ID and a recent incident date | To test the business rules |
+| Example responses and 401/403 added to the spec | For a useful mock and better tests |
+| Which environment the tests may use (creating a settlement starts a payment) | To avoid side effects in prod |
 
 ---
 
-## 6. Conclusion
+## 6. Summary
 
-For a service on different infrastructure, with a different CI system and a different auth model, the onboarding workflow changes only in its inputs. Everything that actually differs is coordination: which CI runs the tests, how the spec is fetched, which credentials exist, and whether the network allows the tests to reach the API. That is the repeatable template: a fixed workflow plus a per-service input set, plus a per-service checklist of platform-team dependencies.
+For Claims, the workflow stays the same. **Only the inputs change.**
+
+The real differences are about coordination with the customer:
+
+- which CI tool runs the tests,
+- how the spec is fetched,
+- which login details exist, and
+- whether the tests can reach the API over the network.
+
+So the repeatable template is:
+
+1. **One fixed workflow**, the same for every service.
+2. **A small set of inputs** per service.
+3. **A checklist** of what to get from the platform team for that service.
